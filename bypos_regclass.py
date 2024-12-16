@@ -9,9 +9,10 @@ import random
 import matplotlib.pyplot as plt
 
 BATCH_SIZES = [128, 256, 256, 128]
-EPOCHS = 100
-WINDOW_SIZE = 4
-PRED_SIZE = 3
+EPOCHS = 30
+WINDOW_SIZE = 5
+PRED_SIZE = 2
+TREND_ACC = False
 LR = 1e-3
 
 gk_features = ['goals_conceded', 'influence', 'minutes',
@@ -209,7 +210,7 @@ for position, (position_data, features) in test_ds_dict.items():
     scaler = scalers[position]  
     position_data["value_unscaled"] = position_data["value"]
     position_data[features] = scaler.fit_transform(position_data[features])
-    test_X, test_y, acc_X, acc_y, plot_X, player_names = [], [], [], [], [], []
+    test_X, test_y, acc_X, acc_y, plot_X, player_names, acc_y_classes = [], [], [], [], [], [], []
     for player, player_data in position_data.groupby(['name']):
         player_data = player_data.reset_index(drop=True)
         
@@ -221,19 +222,22 @@ for position, (position_data, features) in test_ds_dict.items():
             test_y.append(player_data['value'].iloc[i + WINDOW_SIZE])
             plot_X.append(player_data['value_unscaled'].iloc[i: i + WINDOW_SIZE + PRED_SIZE].values.tolist())
             player_names.append(player)
+
             current_value = player_data['value_unscaled'].iloc[i + WINDOW_SIZE - 1]
             acc_X.append(current_value)
+
             future_values = player_data['value_unscaled'].iloc[i + WINDOW_SIZE:i + WINDOW_SIZE + PRED_SIZE]
-            value_change = future_values - current_value
-            
-            max_change = value_change.max()
-            min_change = value_change.min()
-            if min_change <= -1:
-                acc_y.append(1)  
-            elif max_change >= 1:
-                acc_y.append(3) 
-            else:
-                acc_y.append(2)  
+            acc_y.append(future_values.values.tolist())              
+
+            acc_cy = []
+            for val in future_values:
+                if val > current_value:
+                    acc_cy.append(3)
+                elif val < current_value:
+                    acc_cy.append(1)
+                else:
+                    acc_cy.append(2)
+            acc_y_classes.append(acc_cy) 
             
     if not test_X:
         print(f"No sufficient data for position: {position}")
@@ -266,26 +270,24 @@ for position, (position_data, features) in test_ds_dict.items():
     dummy_predictions = np.zeros((len(predictions), num_features))
     dummy_predictions[:, -1] = predictions[:, 0]  
     unnormalized_predictions = scaler.inverse_transform(dummy_predictions)[:, -1]  
-
-    dummy_test_y = np.zeros((len(test_y), num_features))
-    dummy_test_y[:, -1] = test_y.cpu().detach().numpy()
-    unnormalized_test_y = scaler.inverse_transform(dummy_test_y)[:, -1]
-    
     pred_classes = [
-        1 if round(pred) < val else 3 if round(pred) > val else 2
-        for val, pred in zip(acc_X, unnormalized_predictions.tolist())
-    ]
+            1 if round(pred) < val else 3 if round(pred) > val else 2
+            for val, pred in zip(acc_X, unnormalized_predictions.tolist())
+        ]
+    print(pred_classes)
+    if TREND_ACC:
+        accuracy = sum(int(round(value) in future) for value, future in zip(pred_classes, acc_classes_y)) / len(acc_classes_y) * 100 
+    else:
+        accuracy = sum(round(value) in list(map(round, future)) for value, future in zip(unnormalized_predictions.tolist(), acc_y)) / len(acc_y) * 100 
     
-    #accuracy = sum(1 for a, b in zip(pred_classes, acc_y) if a == b) / len(acc_y)
-    accuracy = np.mean(np.round(unnormalized_predictions) == np.round(unnormalized_test_y)) * 100
-    indices = random.sample(range(len(test_X)), min(3, len(test_X)))
+    indices = random.sample(range(len(test_X)), min(20, len(test_X)))
     gameweeks = list(range(1, len(plot_X[0]) + 1))
     colors = ['blue'] * WINDOW_SIZE + ['orange'] * PRED_SIZE
 
     for idx in indices:
-        arrow_direction = pred_classes[idx]
         plt.figure(figsize=(10, 6))
-        my_text = f"Actual value: {unnormalized_test_y[idx]:.2f}\nPredicted value: {unnormalized_predictions[idx]:.2f}"
+        my_text = f"Actual value: {acc_y[idx][0]:.2f}\nPredicted value: {unnormalized_predictions[idx]:.2f}"
+        arrow_direction = pred_classes[idx]
         if arrow_direction == 1:
             plt.arrow(x=WINDOW_SIZE + 0.75, y=max(plot_X[idx]) + 4, dx=0, dy=-3, width=0.1, color="blue") 
         elif arrow_direction == 3:
